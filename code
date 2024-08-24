@@ -13,19 +13,19 @@ from imblearn.over_sampling import SMOTE
 from scipy.stats import randint as sp_randint
 import matplotlib.pyplot as plt
 
-# Definir o caminho da pasta onde os arquivos estão no Colab
+# Define the directory path where the files are located in Colab
 data_dir = '/content/'
 
-# Lista dos arquivos a serem utilizados no modelo
-arquivos = [
+# List of files to be used in the model
+files = [
     'SMI.tif', 'Slope_Degree.tif', 'Saturation.tif', 'Relief_Dissection.tif', 'Geomorphology.tif', 'Geology.tif', 'TPI.tif', 'Cicatrizes.tif'
 ]
-cicatrizes_arquivo = 'Cicatrizes.tif'
+cicatrizes_file = 'Cicatrizes.tif'
 
-# Função para carregar e reamostrar um raster para o shape de referência
-def carregar_reamostrar_raster(file_path, shape_ref, transform_ref, crs_ref):
+# Function to load and resample a raster to the reference shape
+def load_resample_raster(file_path, shape_ref, transform_ref, crs_ref):
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Arquivo não encontrado: {file_path}")
+        raise FileNotFoundError(f"File not found: {file_path}")
     
     with rasterio.open(file_path) as src:
         data = src.read(1)
@@ -40,77 +40,77 @@ def carregar_reamostrar_raster(file_path, shape_ref, transform_ref, crs_ref):
                 dst_crs=crs_ref,
                 resampling=Resampling.bilinear
             )
-            print(f"Reamostrado {file_path} de {data.shape} para {shape_ref}")
+            print(f"Resampled {file_path} from {data.shape} to {shape_ref}")
             return out_data
         else:
-            print(f"Carregado {file_path} com shape {data.shape}")
+            print(f"Loaded {file_path} with shape {data.shape}")
             return data
 
-# Verifique se os arquivos estão presentes no diretório
-print("Arquivos disponíveis no diretório:")
+# Check if the files are present in the directory
+print("Files available in the directory:")
 print(os.listdir(data_dir))
 
-# Carregar a camada de cicatrizes (camada de referência)
-caminho_cicatrizes = os.path.join(data_dir, cicatrizes_arquivo)
-with rasterio.open(caminho_cicatrizes) as src:
+# Load the reference layer (cicatrizes layer)
+cicatrizes_path = os.path.join(data_dir, cicatrizes_file)
+with rasterio.open(cicatrizes_path) as src:
     cicatrizes = src.read(1)
-    referencia_transform = src.transform
-    referencia_crs = src.crs
-referencia_shape = cicatrizes.shape
+    reference_transform = src.transform
+    reference_crs = src.crs
+reference_shape = cicatrizes.shape
 
-# Carregar e reamostrar as outras camadas raster para o shape de referência
-camadas = {}
-for arquivo in arquivos:
-    caminho = os.path.join(data_dir, arquivo)
-    if arquivo != cicatrizes_arquivo:  # Não precisa reamostrar a camada de cicatrizes
-        data = carregar_reamostrar_raster(caminho, referencia_shape, referencia_transform, referencia_crs)
-        camadas[arquivo] = data
+# Load and resample the other raster layers to the reference shape
+layers = {}
+for file in files:
+    path = os.path.join(data_dir, file)
+    if file != cicatrizes_file:  # No need to resample the cicatrizes layer
+        data = load_resample_raster(path, reference_shape, reference_transform, reference_crs)
+        layers[file] = data
 
-# Preparar os dados de entrada para o modelo
-rows, cols = referencia_shape
-X = np.zeros((rows * cols, len(camadas)))
+# Prepare the input data for the model
+rows, cols = reference_shape
+X = np.zeros((rows * cols, len(layers)))
 
-for i, (nome, dados) in enumerate(camadas.items()):
-    X[:, i] = dados.ravel()
+for i, (name, data) in enumerate(layers.items()):
+    X[:, i] = data.ravel()
 
-# Usar a camada de cicatrizes como variável alvo
+# Use the cicatrizes layer as the target variable
 y = cicatrizes.ravel()
 
-# Verificar a distribuição de classes em y
+# Check the class distribution in y
 unique, counts = np.unique(y, return_counts=True)
-print(f"Distribuição de classes em y: {dict(zip(unique, counts))}")
+print(f"Class distribution in y: {dict(zip(unique, counts))}")
 
-# Amostragem de dados para reduzir o tempo de processamento
-sample_size = 5000  # Ajuste o tamanho da amostra conforme necessário
+# Sample data to reduce processing time
+sample_size = 5000  # Adjust the sample size as needed
 indices = np.random.choice(X.shape[0], sample_size, replace=False)
 X_sample = X[indices]
 y_sample = y[indices]
 
-# Dividir os dados em treinamento e teste, garantindo estratificação
+# Split the data into training and testing sets, ensuring stratification
 X_train, X_test, y_train, y_test = train_test_split(X_sample, y_sample, test_size=0.3, random_state=42, stratify=y_sample)
 
-# Verificar a distribuição de classes em y_test
+# Check the class distribution in y_test
 unique_test, counts_test = np.unique(y_test, return_counts=True)
-print(f"Distribuição de classes em y_test: {dict(zip(unique_test, counts_test))}")
+print(f"Class distribution in y_test: {dict(zip(unique_test, counts_test))}")
 
-# Aplicar SMOTE para balanceamento de classes
-if len(np.unique(y_train)) > 1:  # Garantir que existam pelo menos duas classes
-    min_class_samples = np.min(np.bincount(y_train))  # Conta as amostras na classe minoritária
-    n_neighbors = min(5, max(1, min_class_samples - 1))  # Ajustar n_neighbors dinamicamente
+# Apply SMOTE for class balancing
+if len(np.unique(y_train)) > 1:  # Ensure there are at least two classes
+    min_class_samples = np.min(np.bincount(y_train))  # Count the samples in the minority class
+    n_neighbors = min(5, max(1, min_class_samples - 1))  # Dynamically adjust n_neighbors
     smote = SMOTE(random_state=42, k_neighbors=n_neighbors)
     X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
 
-    # Verificar a distribuição de classes após o SMOTE
+    # Check the class distribution after SMOTE
     unique_train_balanced, counts_train_balanced = np.unique(y_train_balanced, return_counts=True)
-    print(f"Distribuição de classes em y_train após o SMOTE: {dict(zip(unique_train_balanced, counts_train_balanced))}")
+    print(f"Class distribution in y_train after SMOTE: {dict(zip(unique_train_balanced, counts_train_balanced))}")
 else:
-    print("SMOTE não aplicado devido à falta de diversidade nas classes.")
+    print("SMOTE not applied due to lack of class diversity.")
     X_train_balanced, y_train_balanced = X_train, y_train
 
-# Configurar validação cruzada estratificada
+# Set up stratified cross-validation
 cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
 
-# Definir os hiperparâmetros para busca com RandomizedSearchCV
+# Define hyperparameters for RandomizedSearchCV
 param_dist_rf = {
     "n_estimators": sp_randint(10, 200),
     "max_depth": sp_randint(3, 20),
@@ -127,8 +127,8 @@ param_dist_gb = {
     "min_samples_leaf": sp_randint(1, 11)
 }
 
-# Inicializar modelos
-modelos = {
+# Initialize models
+models = {
     'Random Forest': RandomForestClassifier(random_state=42),
     'Gradient Boosting': GradientBoostingClassifier(random_state=42),
     'SVM': SVC(probability=True, random_state=42),
@@ -136,40 +136,40 @@ modelos = {
     'k-NN': KNeighborsClassifier(n_neighbors=5)
 }
 
-# Executar RandomizedSearchCV para otimização de hiperparâmetros
-optimizadores = {
-    'Random Forest': RandomizedSearchCV(modelos['Random Forest'], param_distributions=param_dist_rf, n_iter=10, cv=cv, random_state=42, n_jobs=-1),
-    'Gradient Boosting': RandomizedSearchCV(modelos['Gradient Boosting'], param_distributions=param_dist_gb, n_iter=10, cv=cv, random_state=42, n_jobs=-1)
+# Execute RandomizedSearchCV for hyperparameter optimization
+optimizers = {
+    'Random Forest': RandomizedSearchCV(models['Random Forest'], param_distributions=param_dist_rf, n_iter=10, cv=cv, random_state=42, n_jobs=-1),
+    'Gradient Boosting': RandomizedSearchCV(models['Gradient Boosting'], param_distributions=param_dist_gb, n_iter=10, cv=cv, random_state=42, n_jobs=-1)
 }
 
-# Avaliar cada modelo
-resultados = []
+# Evaluate each model
+results = []
 
-for nome, modelo in modelos.items():
-    print(f"Treinando e avaliando o modelo: {nome}")
+for name, model in models.items():
+    print(f"Training and evaluating model: {name}")
     
-    if nome in optimizadores:
-        modelo_otimizado = optimizadores[nome]
-        modelo_otimizado.fit(X_train_balanced, y_train_balanced)
-        melhor_modelo = modelo_otimizado.best_estimator_
-        print(f"Melhor modelo para {nome}: {modelo_otimizado.best_params_}")
+    if name in optimizers:
+        optimized_model = optimizers[name]
+        optimized_model.fit(X_train_balanced, y_train_balanced)
+        best_model = optimized_model.best_estimator_
+        print(f"Best model for {name}: {optimized_model.best_params_}")
     else:
-        melhor_modelo = modelo
-        melhor_modelo.fit(X_train_balanced, y_train_balanced)
+        best_model = model
+        best_model.fit(X_train_balanced, y_train_balanced)
     
-    y_pred = melhor_modelo.predict(X_test)
+    y_pred = best_model.predict(X_test)
     
-    # Verificar se predict_proba está disponível
-    if hasattr(melhor_modelo, "predict_proba"):
-        y_pred_proba = melhor_modelo.predict_proba(X_test)
+    # Check if predict_proba is available
+    if hasattr(best_model, "predict_proba"):
+        y_pred_proba = best_model.predict_proba(X_test)
         if y_pred_proba.shape[1] > 1:
-            y_pred_proba = y_pred_proba[:, 1]  # Pegue a probabilidade da classe positiva
+            y_pred_proba = y_pred_proba[:, 1]  # Get the probability of the positive class
         else:
-            y_pred_proba = y_pred_proba[:, 0]  # Só existe uma classe
+            y_pred_proba = y_pred_proba[:, 0]  # Only one class exists
     else:
-        y_pred_proba = y_pred  # Para modelos como SVM sem predict_proba
+        y_pred_proba = y_pred  # For models like SVM without predict_proba
 
-    # Calcular AUC-ROC, se possível
+    # Calculate AUC-ROC, if possible
     if len(np.unique(y_test)) > 1:
         auc = roc_auc_score(y_test, y_pred_proba)
     else:
@@ -180,8 +180,8 @@ for nome, modelo in modelos.items():
     precision = precision_score(y_test, y_pred, average='macro')
     recall = recall_score(y_test, y_pred, average='macro')
 
-    resultados.append({
-        'Modelo': nome,
+    results.append({
+        'Model': name,
         'AUC-ROC': auc,
         'Accuracy': acc,
         'F1 Score': f1,
@@ -189,27 +189,27 @@ for nome, modelo in modelos.items():
         'Recall': recall
     })
 
-# Criar uma tabela com os resultados
-resultados_df = pd.DataFrame(resultados)
-print(resultados_df)
+# Create a table with the results
+results_df = pd.DataFrame(results)
+print(results_df)
 
-# Identificar o melhor modelo
-melhor_modelo_nome = resultados_df.loc[resultados_df['F1 Score'].idxmax()]['Modelo']
-print(f'O melhor modelo é: {melhor_modelo_nome}')
+# Identify the best model
+best_model_name = results_df.loc[results_df['F1 Score'].idxmax()]['Model']
+print(f'The best model is: {best_model_name}')
 
-# Ajuste de limiar de decisão para o melhor modelo
-melhor_modelo = modelos[melhor_modelo_nome]
-melhor_modelo.fit(X_train_balanced, y_train_balanced)
-if hasattr(melhor_modelo, "predict_proba"):
-    y_pred_proba = melhor_modelo.predict_proba(X_test)
+# Adjust decision threshold for the best model
+best_model = models[best_model_name]
+best_model.fit(X_train_balanced, y_train_balanced)
+if hasattr(best_model, "predict_proba"):
+    y_pred_proba = best_model.predict_proba(X_test)
     if y_pred_proba.shape[1] > 1:
-        y_pred_proba = y_pred_proba[:, 1]  # Pegue a probabilidade da classe positiva
+        y_pred_proba = y_pred_proba[:, 1]  # Get the probability of the positive class
     else:
-        y_pred_proba = y_pred_proba[:, 0]  # Só existe uma classe
+        y_pred_proba = y_pred_proba[:, 0]  # Only one class exists
 else:
-    y_pred_proba = y_pred  # Para modelos como SVM sem predict_proba
+    y_pred_proba = y_pred  # For models like SVM without predict_proba
 
-# Ajustar o limiar de decisão para otimizar F1 Score
+# Adjust the decision threshold to optimize F1 Score
 thresholds = [0.1, 0.2, 0.3, 0.4, 0.5]
 best_threshold = 0.5
 best_f1 = 0
@@ -221,26 +221,26 @@ for threshold in thresholds:
         best_f1 = f1
         best_threshold = threshold
 
-print(f"Melhor limiar: {best_threshold} com F1 Score: {best_f1}")
+print(f"Best threshold: {best_threshold} with F1 Score: {best_f1}")
 
 y_pred_adjusted = (y_pred_proba >= best_threshold).astype(int)
 
-# Avaliar o modelo com o novo limiar
-print("Resultados após ajuste do limiar de decisão:")
+# Evaluate the model with the new decision threshold
+print("Results after adjusting the decision threshold:")
 print(classification_report(y_test, y_pred_adjusted))
 
-# Prever a susceptibilidade usando o melhor modelo com o limiar ajustado
-y_pred_proba_all = melhor_modelo.predict_proba(X)
+# Predict susceptibility using the best model with the adjusted threshold
+y_pred_proba_all = best_model.predict_proba(X)
 if y_pred_proba_all.shape[1] > 1:
     y_pred_proba_all = y_pred_proba_all[:, 1]
 else:
     y_pred_proba_all = y_pred_proba_all[:, 0]
 
-susceptibilidade_adjusted = (y_pred_proba_all >= best_threshold).astype(int)
-susceptibilidade_raster = susceptibilidade_adjusted.reshape((rows, cols))
+susceptibility_adjusted = (y_pred_proba_all >= best_threshold).astype(int)
+susceptibility_raster = susceptibility_adjusted.reshape((rows, cols))
 
-# Salvar o resultado como um novo arquivo raster em formato GeoTIFF
-output_file = os.path.join(data_dir, 'mapa_susceptibilidade.tif')
+# Save the result as a new raster file in GeoTIFF format
+output_file = os.path.join(data_dir, 'susceptibility_map.tif')
 
 with rasterio.open(
     output_file, 'w',
@@ -249,17 +249,17 @@ with rasterio.open(
     width=cols,
     count=1,
     dtype=rasterio.int32,
-    crs=referencia_crs,
-    transform=referencia_transform,
+    crs=reference_crs,
+    transform=reference_transform,
     compress='lzw'
 ) as dst:
-    dst.write(susceptibilidade_raster.astype(rasterio.int32), 1)
+    dst.write(susceptibility_raster.astype(rasterio.int32), 1)
 
-print(f'Mapa de susceptibilidade salvo em: {output_file}')
+print(f'Susceptibility map saved in: {output_file}')
 
-# Mostrar o mapa de susceptibilidade
+# Display the susceptibility map
 plt.figure(figsize=(10, 10))
-plt.imshow(susceptibilidade_raster, cmap='viridis')
+plt.imshow(susceptibility_raster, cmap='viridis')
 plt.colorbar()
-plt.title('Mapa de Susceptibilidade a Deslizamentos')
+plt.title('Landslide Susceptibility Map')
 plt.show()
