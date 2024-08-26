@@ -1,33 +1,38 @@
 !pip install rasterio
+!pip install imbalanced-learn
 
 import rasterio
 import numpy as np
 import os
-from rasterio.warp import reproject, Resampling
+from rasterio.warp import reproject, Resampling  # Adicionando a importação de reproject
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_predict
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, precision_score, recall_score, classification_report
 import pandas as pd
 from imblearn.over_sampling import SMOTE
 import matplotlib.pyplot as plt
 
-# Definir o caminho da pasta onde os arquivos estão no Colab
+# Set a global random seed for reproducibility
+random_seed = 42
+np.random.seed(random_seed)
+
+# Define the path to the folder where the files are in Colab
 data_dir = '/content/'
 
-# Lista dos arquivos a serem utilizados no modelo
+# List of files to be used in the model
 arquivos = [
     'SMI.tif', 'Slope_Degree.tif', 'Saturation.tif', 'Relief_Dissection.tif', 'Geomorphology.tif', 'Geology.tif', 'TPI.tif', 'Cicatrizes.tif'
 ]
 cicatrizes_arquivo = 'Cicatrizes.tif'
 
-# Função para carregar e reamostrar um raster para o shape de referência
+# Function to load and resample a raster to the reference shape
 def carregar_reamostrar_raster(file_path, shape_ref, transform_ref, crs_ref):
     if not os.path.exists(file_path):
-        raise FileNotFoundError(f"Arquivo não encontrado: {file_path}")
-    
+        raise FileNotFoundError(f"File not found: {file_path}")
+
     with rasterio.open(file_path) as src:
         data = src.read(1)
         if data.shape != shape_ref:
@@ -41,17 +46,17 @@ def carregar_reamostrar_raster(file_path, shape_ref, transform_ref, crs_ref):
                 dst_crs=crs_ref,
                 resampling=Resampling.bilinear
             )
-            print(f"Reamostrado {file_path} de {data.shape} para {shape_ref}")
+            print(f"Resampled {file_path} from {data.shape} to {shape_ref}")
             return out_data
         else:
-            print(f"Carregado {file_path} com shape {data.shape}")
+            print(f"Loaded {file_path} with shape {data.shape}")
             return data
 
-# Verifique se os arquivos estão presentes no diretório
-print("Arquivos disponíveis no diretório:")
+# Check if the files are present in the directory
+print("Files available in the directory:")
 print(os.listdir(data_dir))
 
-# Carregar a camada de cicatrizes (camada de referência)
+# Load the scars layer (reference layer)
 caminho_cicatrizes = os.path.join(data_dir, cicatrizes_arquivo)
 with rasterio.open(caminho_cicatrizes) as src:
     cicatrizes = src.read(1)
@@ -59,143 +64,114 @@ with rasterio.open(caminho_cicatrizes) as src:
     referencia_crs = src.crs
 referencia_shape = cicatrizes.shape
 
-# Carregar e reamostrar as outras camadas raster para o shape de referência
+# Load and resample the other raster layers to the reference shape
 camadas = {}
 for arquivo in arquivos:
     caminho = os.path.join(data_dir, arquivo)
-    if arquivo != cicatrizes_arquivo:  # Não precisa reamostrar a camada de cicatrizes
+    if arquivo != cicatrizes_arquivo:  # No need to resample the scars layer
         data = carregar_reamostrar_raster(caminho, referencia_shape, referencia_transform, referencia_crs)
         camadas[arquivo] = data
 
-# Preparar os dados de entrada para o modelo
+# Prepare the input data for the model
 rows, cols = referencia_shape
 X = np.zeros((rows * cols, len(camadas)))
 
 for i, (nome, dados) in enumerate(camadas.items()):
     X[:, i] = dados.ravel()
 
-# Usar a camada de cicatrizes como variável alvo
+# Use the scars layer as the target variable
 y = cicatrizes.ravel()
 
-# Verificar a distribuição de classes em y
+# Check the class distribution in y
 unique, counts = np.unique(y, return_counts=True)
-print(f"Distribuição de classes em y: {dict(zip(unique, counts))}")
+print(f"Class distribution in y: {dict(zip(unique, counts))}")
 
-# Iterações de amostragem e validação cruzada
-n_iter = 10  # Número de iterações
+# Sampling data to reduce processing time
+sample_size = 5000  # Adjust the sample size as needed
+indices = np.random.choice(X.shape[0], sample_size, replace=False)
+X_sample = X[indices]
+y_sample = y[indices]
+
+# Split the data into training and test sets, ensuring stratification
+X_train, X_test, y_train, y_test = train_test_split(X_sample, y_sample, test_size=0.3, random_state=random_seed, stratify=y_sample)
+
+# Check the class distribution in y_test
+unique_test, counts_test = np.unique(y_test, return_counts=True)
+print(f"Class distribution in y_test: {dict(zip(unique_test, counts_test))}")
+
+# Apply SMOTE for class balancing
+if len(np.unique(y_train)) > 1:  # Ensure there are at least two classes
+    min_class_samples = np.min(np.bincount(y_train))  # Count samples in the minority class
+    n_neighbors = min(5, max(1, min_class_samples - 1))  # Adjust n_neighbors dynamically
+    smote = SMOTE(random_state=random_seed, k_neighbors=n_neighbors)
+    X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+else:
+    print("SMOTE not applied due to lack of class diversity.")
+    X_train_balanced, y_train_balanced = X_train, y_train
+
+# Initialize models
+modelos = {
+    'Random Forest': RandomForestClassifier(random_state=random_seed),
+    'Gradient Boosting': GradientBoostingClassifier(random_state=random_seed),
+    'SVM': SVC(probability=True, random_state=random_seed),
+    'ANN': MLPClassifier(max_iter=200, random_state=random_seed),
+    'k-NN': KNeighborsClassifier(n_neighbors=5)
+}
+
+# Evaluate each model
 best_score = -np.inf
 best_model = None
-best_X_train_balanced = None
-best_y_train_balanced = None
-all_results = []
+metrics_table = []
 
-for iteration in range(n_iter):
-    print(f"\n--- Iteração {iteration + 1}/{n_iter} ---")
+for nome, modelo in modelos.items():
+    print(f"Training and evaluating the model: {nome}")
+
+    # Train the model on the balanced data
+    modelo.fit(X_train_balanced, y_train_balanced)
+
+    # Make predictions on the test set
+    y_pred = modelo.predict(X_test)
     
-    # Amostragem de dados para reduzir o tempo de processamento
-    sample_size = 5000  # Ajuste o tamanho da amostra conforme necessário
-    indices = np.random.choice(X.shape[0], sample_size, replace=False)
-    X_sample = X[indices]
-    y_sample = y[indices]
-    
-    # Dividir os dados em treinamento e teste, garantindo estratificação
-    X_train, X_test, y_train, y_test = train_test_split(X_sample, y_sample, test_size=0.3, random_state=42, stratify=y_sample)
-    
-    # Verificar a distribuição de classes em y_test
-    unique_test, counts_test = np.unique(y_test, return_counts=True)
-    print(f"Distribuição de classes em y_test: {dict(zip(unique_test, counts_test))}")
-    
-    # Aplicar SMOTE para balanceamento de classes
-    if len(np.unique(y_train)) > 1:  # Garantir que existam pelo menos duas classes
-        min_class_samples = np.min(np.bincount(y_train))  # Conta as amostras na classe minoritária
-        n_neighbors = min(5, max(1, min_class_samples - 1))  # Ajustar n_neighbors dinamicamente
-        smote = SMOTE(random_state=42, k_neighbors=n_neighbors)
-        X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
-    
-        # Verificar a distribuição de classes após o SMOTE
-        unique_train_balanced, counts_train_balanced = np.unique(y_train_balanced, return_counts=True)
-        print(f"Distribuição de classes em y_train após o SMOTE: {dict(zip(unique_train_balanced, counts_train_balanced))}")
+    if len(np.unique(y_train_balanced)) == 2:  # Check if it's binary classification
+        y_pred_proba = modelo.predict_proba(X_test)[:, 1] if hasattr(modelo, "predict_proba") else y_pred
+        auc = roc_auc_score(y_test, y_pred_proba)
     else:
-        print("SMOTE não aplicado devido à falta de diversidade nas classes.")
-        X_train_balanced, y_train_balanced = X_train, y_train
-    
-    # Configurar validação cruzada estratificada
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    
-    # Inicializar modelos
-    modelos = {
-        'Random Forest': RandomForestClassifier(random_state=42),
-        'Gradient Boosting': GradientBoostingClassifier(random_state=42),
-        'SVM': SVC(probability=True, random_state=42),
-        'ANN': MLPClassifier(max_iter=200, random_state=42),
-        'k-NN': KNeighborsClassifier(n_neighbors=5)
-    }
-    
-    # Avaliar cada modelo
-    for nome, modelo in modelos.items():
-        print(f"Treinando e avaliando o modelo: {nome}")
-        
-        # Fazer predições usando cross_val_predict
-        y_pred = cross_val_predict(modelo, X_train_balanced, y_train_balanced, cv=cv)
-        
-        # Calcular as métricas
-        acc = accuracy_score(y_train_balanced, y_pred)
-        f1 = f1_score(y_train_balanced, y_pred, average='macro')
-        precision = precision_score(y_train_balanced, y_pred, average='macro')
-        recall = recall_score(y_train_balanced, y_pred, average='macro')
-        
-        if len(np.unique(y_train_balanced)) > 1:
-            auc = roc_auc_score(y_train_balanced, cross_val_predict(modelo, X_train_balanced, y_train_balanced, cv=cv, method='predict_proba')[:, 1])
-        else:
-            auc = None
-        
-        score = np.mean([auc, acc, f1, precision, recall]) if auc is not None else np.mean([acc, f1, precision, recall])
-        
-        print(f"Resultados: AUC-ROC: {auc}, Accuracy: {acc}, F1 Score: {f1}, Precision: {precision}, Recall: {recall}")
-        
-        all_results.append({
-            'Modelo': nome,
-            'AUC-ROC': auc,
-            'Accuracy': acc,
-            'F1 Score': f1,
-            'Precision': precision,
-            'Recall': recall,
-            'Score': score,
-            'Iteração': iteration + 1
-        })
-        
-        if score > best_score:
-            best_score = score
-            best_model = modelo
-            best_X_train_balanced = X_train_balanced
-            best_y_train_balanced = y_train_balanced
-    
-    print(f"Melhor modelo nesta iteração: {best_model} com Score: {best_score}")
+        y_pred_proba = modelo.predict_proba(X_test)
+        auc = roc_auc_score(y_test, y_pred_proba, multi_class='ovr')  # Handle multiclass case
 
-# Criar uma tabela final com as métricas de todos os modelos testados na última iteração
-resultados_df_final = pd.DataFrame([r for r in all_results if r['Iteração'] == n_iter])
-print("\nTabela final com as métricas de todos os modelos testados na última iteração:")
-print(resultados_df_final)
+    # Calculate other metrics
+    acc = accuracy_score(y_test, y_pred)
+    f1 = f1_score(y_test, y_pred, average='macro')
+    precision = precision_score(y_test, y_pred, average='macro')
+    recall = recall_score(y_test, y_pred, average='macro')
 
-# Identificar o melhor modelo final com base em todas as métricas
-melhor_modelo_final_nome = resultados_df_final.loc[resultados_df_final['Score'].idxmax()]['Modelo']
-print(f"\nO melhor modelo final é: {melhor_modelo_final_nome}")
+    score = np.mean([auc, acc, f1, precision, recall]) if auc is not None else np.mean([acc, f1, precision, recall])
 
-# Treinar o melhor modelo com a melhor amostragem encontrada
-print(f"\nTreinando o melhor modelo final: {melhor_modelo_final_nome} com a melhor amostragem")
-best_model.fit(best_X_train_balanced, best_y_train_balanced)
+    print(f"Results: AUC-ROC: {auc}, Accuracy: {acc}, F1 Score: {f1}, Precision: {precision}, Recall: {recall}")
 
-# Prever a susceptibilidade usando o melhor modelo
-y_pred_proba_all = best_model.predict_proba(X)
-if y_pred_proba_all.shape[1] > 1:
-    y_pred_proba_all = y_pred_proba_all[:, 1]
-else:
-    y_pred_proba_all = y_pred_proba_all[:, 0]
+    metrics_table.append({
+        'Model': nome,
+        'AUC-ROC': auc,
+        'Accuracy': acc,
+        'F1 Score': f1,
+        'Precision': precision,
+        'Recall': recall
+    })
 
-susceptibilidade_adjusted = (y_pred_proba_all >= 0.5).astype(int)
-susceptibilidade_raster = susceptibilidade_adjusted.reshape((rows, cols))
+    if score > best_score:
+        best_score = score
+        best_model = modelo
 
-# Salvar o resultado como um novo arquivo raster em formato GeoTIFF
+# Convert the metrics to a DataFrame for easier visualization
+metrics_df = pd.DataFrame(metrics_table)
+print("\nFinal table with the metrics of all models tested:")
+print(metrics_df)
+
+# Predict susceptibility using the best model
+y_pred_proba_all = best_model.predict_proba(X)[:, 1] if hasattr(best_model, "predict_proba") else best_model.predict(X)
+susceptibilidade_raster = y_pred_proba_all.reshape((rows, cols))
+
+# Save the result as a new raster file in GeoTIFF format
 output_file = os.path.join(data_dir, 'mapa_susceptibilidade.tif')
 
 with rasterio.open(
@@ -204,18 +180,18 @@ with rasterio.open(
     height=rows,
     width=cols,
     count=1,
-    dtype=rasterio.int32,
+    dtype=rasterio.float32,  # Use float32 to ensure probabilities are correctly represented
     crs=referencia_crs,
     transform=referencia_transform,
     compress='lzw'
 ) as dst:
-    dst.write(susceptibilidade_raster.astype(rasterio.int32), 1)
+    dst.write(susceptibilidade_raster.astype(rasterio.float32), 1)
 
-print(f'Mapa de susceptibilidade salvo em: {output_file}')
+print(f'Susceptibility map saved at: {output_file}')
 
-# Mostrar o mapa de susceptibilidade
+# Display the susceptibility map
 plt.figure(figsize=(10, 10))
 plt.imshow(susceptibilidade_raster, cmap='viridis')
 plt.colorbar()
-plt.title('Mapa de Susceptibilidade a Deslizamentos')
+plt.title('Landslide Susceptibility Map')
 plt.show()
