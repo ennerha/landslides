@@ -1,18 +1,19 @@
-!pip install rasterio
-!pip install imbalanced-learn
+!pip install rasterio geopandas imbalanced-learn
 
 import rasterio
 import numpy as np
 import os
-from rasterio.warp import reproject, Resampling  # Adicionando a importação de reproject
+from rasterio.warp import reproject, Resampling
+from rasterio.mask import mask
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, precision_score, recall_score, classification_report
+from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, precision_score, recall_score
 import pandas as pd
 from imblearn.over_sampling import SMOTE
+import geopandas as gpd
 import matplotlib.pyplot as plt
 
 # Set a global random seed for reproducibility
@@ -27,6 +28,7 @@ arquivos = [
     'SMI.tif', 'Slope_Degree.tif', 'Saturation.tif', 'Relief_Dissection.tif', 'Geomorphology.tif', 'Geology.tif', 'TPI.tif', 'Cicatrizes.tif'
 ]
 cicatrizes_arquivo = 'Cicatrizes.tif'
+shapefile_path = '/content/Limite_Ajustado.shp'
 
 # Function to load and resample a raster to the reference shape
 def carregar_reamostrar_raster(file_path, shape_ref, transform_ref, crs_ref):
@@ -109,12 +111,12 @@ else:
     print("SMOTE not applied due to lack of class diversity.")
     X_train_balanced, y_train_balanced = X_train, y_train
 
-# Initialize models
+# Initialize models with regularization
 modelos = {
-    'Random Forest': RandomForestClassifier(random_state=random_seed),
-    'Gradient Boosting': GradientBoostingClassifier(random_state=random_seed),
-    'SVM': SVC(probability=True, random_state=random_seed),
-    'ANN': MLPClassifier(max_iter=200, random_state=random_seed),
+    'Random Forest': RandomForestClassifier(n_estimators=100, max_depth=10, random_state=random_seed),  # Regularizing depth
+    'Gradient Boosting': GradientBoostingClassifier(n_estimators=100, learning_rate=0.1, max_depth=3, random_state=random_seed),
+    'SVM': SVC(C=0.1, probability=True, random_state=random_seed),  # Regularizing with C
+    'ANN': MLPClassifier(alpha=0.0001, max_iter=200, random_state=random_seed),  # Regularizing with alpha
     'k-NN': KNeighborsClassifier(n_neighbors=5)
 }
 
@@ -189,9 +191,32 @@ with rasterio.open(
 
 print(f'Susceptibility map saved at: {output_file}')
 
-# Display the susceptibility map
+# Crop the susceptibility map using the shapefile
+# Load the shapefile
+shapefile = gpd.read_file(shapefile_path)
+
+with rasterio.open(output_file) as src:
+    out_image, out_transform = mask(src, shapes=shapefile.geometry, crop=True)
+    out_meta = src.meta.copy()
+
+# Update the metadata to reflect the new shape and transform
+out_meta.update({
+    "driver": "GTiff",
+    "height": out_image.shape[1],
+    "width": out_image.shape[2],
+    "transform": out_transform
+})
+
+# Save the cropped raster
+cropped_output_file = '/content/mapa_susceptibilidade_recortado.tif'
+with rasterio.open(cropped_output_file, "w", **out_meta) as dest:
+    dest.write(out_image)
+
+print(f'Cropped susceptibility map saved at: {cropped_output_file}')
+
+# Display the cropped susceptibility map
 plt.figure(figsize=(10, 10))
-plt.imshow(susceptibilidade_raster, cmap='viridis')
+plt.imshow(out_image[0], cmap='viridis')
 plt.colorbar()
-plt.title('Landslide Susceptibility Map')
+plt.title('Cropped Landslide Susceptibility Map')
 plt.show()
