@@ -25,7 +25,7 @@ data_dir = '/content/'
 
 # List of files to be used in the model
 arquivos = [
-    'SMI.tif', 'Slope_Degree.tif', 'Saturation.tif', 'Relief_Dissection.tif', 'Geomorphology.tif', 'Geology.tif', 'TPI.tif', 'Cicatrizes.tif'
+    'SMI.tif', 'Slope_Degree.tif', 'Saturation.tif', 'Relief_Dissection.tif', 'Geomorphology.tif', 'Geology.tif', 'TPI.tif'
 ]
 cicatrizes_arquivo = 'Cicatrizes.tif'
 shapefile_path = '/content/Limite_Ajustado.shp'
@@ -133,7 +133,7 @@ for nome, modelo in modelos.items():
 
     # Make predictions on the test set
     y_pred = modelo.predict(X_test)
-    
+
     if len(np.unique(y_train_balanced)) == 2:  # Check if it's binary classification
         y_pred_proba = modelo.predict_proba(X_test)[:, 1] if hasattr(modelo, "predict_proba") else y_pred
         auc = roc_auc_score(y_test, y_pred_proba)
