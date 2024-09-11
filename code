@@ -1,5 +1,7 @@
-!pip install rasterio geopandas imbalanced-learn
+# Install required packages
+!pip install rasterio geopandas imbalanced-learn psutil
 
+# Import required libraries
 import rasterio
 import numpy as np
 import os
@@ -10,15 +12,22 @@ from sklearn.svm import SVC
 from sklearn.neural_network import MLPClassifier
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, precision_score, recall_score
+from sklearn.metrics import roc_auc_score, accuracy_score, f1_score, precision_score, recall_score, matthews_corrcoef
 import pandas as pd
 from imblearn.over_sampling import SMOTE
 import geopandas as gpd
 import matplotlib.pyplot as plt
+import psutil
+import joblib
+import torch
+import fiona
 
 # Set a global random seed for reproducibility
 random_seed = 42
 np.random.seed(random_seed)
+
+# Check for GPU availability
+print("GPU available:", torch.cuda.is_available())
 
 # Define the path to the folder where the files are in Colab
 data_dir = '/content/'
@@ -28,7 +37,7 @@ arquivos = [
     'SMI.tif', 'Slope_Degree.tif', 'Saturation.tif', 'Relief_Dissection.tif', 'Geomorphology.tif', 'Geology.tif', 'TPI.tif'
 ]
 cicatrizes_arquivo = 'Cicatrizes.tif'
-shapefile_path = '/content/Limite_Ajustado.shp'
+shapefile_name = 'Limite_Ajustado.shp'
 
 # Function to load and resample a raster to the reference shape
 def carregar_reamostrar_raster(file_path, shape_ref, transform_ref, crs_ref):
@@ -59,20 +68,28 @@ print("Files available in the directory:")
 print(os.listdir(data_dir))
 
 # Load the scars layer (reference layer)
-caminho_cicatrizes = os.path.join(data_dir, cicatrizes_arquivo)
-with rasterio.open(caminho_cicatrizes) as src:
-    cicatrizes = src.read(1)
-    referencia_transform = src.transform
-    referencia_crs = src.crs
-referencia_shape = cicatrizes.shape
+try:
+    caminho_cicatrizes = os.path.join(data_dir, cicatrizes_arquivo)
+    with rasterio.open(caminho_cicatrizes) as src:
+        cicatrizes = src.read(1)
+        referencia_transform = src.transform
+        referencia_crs = src.crs
+    referencia_shape = cicatrizes.shape
+except Exception as e:
+    print(f"Error loading scars layer: {e}")
+    raise
 
 # Load and resample the other raster layers to the reference shape
 camadas = {}
 for arquivo in arquivos:
     caminho = os.path.join(data_dir, arquivo)
     if arquivo != cicatrizes_arquivo:  # No need to resample the scars layer
-        data = carregar_reamostrar_raster(caminho, referencia_shape, referencia_transform, referencia_crs)
-        camadas[arquivo] = data
+        try:
+            data = carregar_reamostrar_raster(caminho, referencia_shape, referencia_transform, referencia_crs)
+            camadas[arquivo] = data
+        except Exception as e:
+            print(f"Error loading/resampling {arquivo}: {e}")
+            # Handle the error appropriately, e.g., skip this layer or use a default value
 
 # Prepare the input data for the model
 rows, cols = referencia_shape
@@ -89,8 +106,9 @@ unique, counts = np.unique(y, return_counts=True)
 print(f"Class distribution in y: {dict(zip(unique, counts))}")
 
 # Sampling data to reduce processing time
-sample_size = 5000  # Adjust the sample size as needed
-indices = np.random.choice(X.shape[0], sample_size, replace=False)
+total_samples = X.shape[0]
+sample_size = min(5000, total_samples // 10)  # 10% of data or 5000, whichever is smaller
+indices = np.random.choice(total_samples, sample_size, replace=False)
 X_sample = X[indices]
 y_sample = y[indices]
 
@@ -127,6 +145,7 @@ metrics_table = []
 
 for nome, modelo in modelos.items():
     print(f"Training and evaluating the model: {nome}")
+    print(f"Memory usage before training: {psutil.virtual_memory().percent}%")
 
     # Train the model on the balanced data
     modelo.fit(X_train_balanced, y_train_balanced)
@@ -146,10 +165,11 @@ for nome, modelo in modelos.items():
     f1 = f1_score(y_test, y_pred, average='macro')
     precision = precision_score(y_test, y_pred, average='macro')
     recall = recall_score(y_test, y_pred, average='macro')
+    mcc = matthews_corrcoef(y_test, y_pred)  # Calculate MCC
 
-    score = np.mean([auc, acc, f1, precision, recall]) if auc is not None else np.mean([acc, f1, precision, recall])
+    score = np.mean([auc, acc, f1, precision, recall, mcc]) if auc is not None else np.mean([acc, f1, precision, recall, mcc])
 
-    print(f"Results: AUC-ROC: {auc}, Accuracy: {acc}, F1 Score: {f1}, Precision: {precision}, Recall: {recall}")
+    print(f"Results: AUC-ROC: {auc}, Accuracy: {acc}, F1 Score: {f1}, Precision: {precision}, Recall: {recall}, MCC: {mcc}")
 
     metrics_table.append({
         'Model': nome,
@@ -157,21 +177,31 @@ for nome, modelo in modelos.items():
         'Accuracy': acc,
         'F1 Score': f1,
         'Precision': precision,
-        'Recall': recall
+        'Recall': recall,
+        'MCC': mcc  # Add MCC to the metrics table
     })
 
     if score > best_score:
         best_score = score
         best_model = modelo
 
+    print(f"Memory usage after training: {psutil.virtual_memory().percent}%")
+
 # Convert the metrics to a DataFrame for easier visualization
 metrics_df = pd.DataFrame(metrics_table)
 print("\nFinal table with the metrics of all models tested:")
 print(metrics_df)
 
+# Save the best model
+joblib.dump(best_model, '/content/best_model.joblib')
+print("Best model saved as 'best_model.joblib'")
+
 # Predict susceptibility using the best model
+print("Predicting susceptibility...")
+print(f"Memory usage before prediction: {psutil.virtual_memory().percent}%")
 y_pred_proba_all = best_model.predict_proba(X)[:, 1] if hasattr(best_model, "predict_proba") else best_model.predict(X)
 susceptibilidade_raster = y_pred_proba_all.reshape((rows, cols))
+print(f"Memory usage after prediction: {psutil.virtual_memory().percent}%")
 
 # Save the result as a new raster file in GeoTIFF format
 output_file = os.path.join(data_dir, 'mapa_susceptibilidade.tif')
@@ -192,31 +222,54 @@ with rasterio.open(
 print(f'Susceptibility map saved at: {output_file}')
 
 # Crop the susceptibility map using the shapefile
-# Load the shapefile
-shapefile = gpd.read_file(shapefile_path)
+print("Attempting to crop the susceptibility map...")
 
-with rasterio.open(output_file) as src:
-    out_image, out_transform = mask(src, shapes=shapefile.geometry, crop=True)
-    out_meta = src.meta.copy()
+# Set the shapefile path
+shapefile_path = os.path.join(data_dir, shapefile_name)
 
-# Update the metadata to reflect the new shape and transform
-out_meta.update({
-    "driver": "GTiff",
-    "height": out_image.shape[1],
-    "width": out_image.shape[2],
-    "transform": out_transform
-})
+try:
+    # Set the SHAPE_RESTORE_SHX option
+    fiona.config.set_option('SHAPE_RESTORE_SHX', 'YES')
+    
+    print(f"Attempting to load shapefile: {shapefile_path}")
+    shapefile = gpd.read_file(shapefile_path)
+    print("Shapefile loaded successfully.")
+    
+    with rasterio.open(output_file) as src:
+        out_image, out_transform = mask(src, shapes=shapefile.geometry, crop=True)
+        out_meta = src.meta.copy()
 
-# Save the cropped raster
-cropped_output_file = '/content/mapa_susceptibilidade_recortado.tif'
-with rasterio.open(cropped_output_file, "w", **out_meta) as dest:
-    dest.write(out_image)
+    # Update the metadata to reflect the new shape and transform
+    out_meta.update({
+        "driver": "GTiff",
+        "height": out_image.shape[1],
+        "width": out_image.shape[2],
+        "transform": out_transform
+    })
 
-print(f'Cropped susceptibility map saved at: {cropped_output_file}')
+    # Save the cropped raster
+    cropped_output_file = os.path.join(data_dir, 'mapa_susceptibilidade_recortado.tif')
+    with rasterio.open(cropped_output_file, "w", **out_meta) as dest:
+        dest.write(out_image)
 
-# Display the cropped susceptibility map
-plt.figure(figsize=(10, 10))
-plt.imshow(out_image[0], cmap='viridis')
-plt.colorbar()
-plt.title('Cropped Landslide Susceptibility Map')
-plt.show()
+    print(f'Cropped susceptibility map saved at: {cropped_output_file}')
+
+    # Display the cropped susceptibility map
+    plt.figure(figsize=(10, 10))
+    plt.imshow(out_image[0], cmap='viridis')
+    plt.colorbar()
+    plt.title('Cropped Landslide Susceptibility Map')
+    plt.show()
+except Exception as e:
+    print(f"Error processing shapefile: {e}")
+    print("Proceeding without cropping.")
+    
+    # Display the uncropped susceptibility map
+    plt.figure(figsize=(10, 10))
+    with rasterio.open(output_file) as src:
+        plt.imshow(src.read(1), cmap='viridis')
+    plt.colorbar()
+    plt.title('Uncropped Landslide Susceptibility Map')
+    plt.show()
+
+print(f"Final memory usage: {psutil.virtual_memory().percent}%")
